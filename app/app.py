@@ -144,7 +144,7 @@ st.markdown("""
         padding: 40px;
         font-size: 16px;
     }
-            
+
     /* Skeleton loading card */
     .skeleton-card {
         background-color: #1f1f1f;
@@ -208,7 +208,7 @@ st.markdown("""
         font-size: 14px;
         color: #666;
     }
-                    
+
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {visibility: hidden;}
@@ -260,46 +260,57 @@ def search_movies(query, movies, top_n=8):
 
 def get_recommendations_from_movie(movie_id, user_movie_matrix, user_similarity_df, movies, links, num_recommendations=10):
     """
-    Given a movie, find users who loved it,
-    then recommend what else those users loved
+    Given a movie, find recommendations using collaborative filtering.
+    Falls back to content-based (genre matching) if not enough results.
     """
-    # Find users who rated this movie highly (4.0+)
-    movie_lovers = user_movie_matrix[user_movie_matrix[movie_id] >= 4.0].index.tolist()
-
-    if not movie_lovers:
-        # Fallback: find users who rated it at all
-        movie_lovers = user_movie_matrix[user_movie_matrix[movie_id] > 0].index.tolist()
-
-    if not movie_lovers:
-        return pd.DataFrame()
-
-    # For each lover, find their similar users
     recommended_movies = {}
 
-    for lover_id in movie_lovers[:20]:  # limit to top 20 lovers
-        # Find users similar to this lover
-        similar_users = user_similarity_df[lover_id].sort_values(ascending=False)
-        similar_users = similar_users.drop(lover_id)
-        top_similar = similar_users.head(5).index.tolist()
+    # ---- COLLABORATIVE FILTERING ----
+    if movie_id in user_movie_matrix.columns:
+        movie_lovers = user_movie_matrix[user_movie_matrix[movie_id] >= 4.0].index.tolist()
 
-        for similar_user in top_similar:
-            similarity_score = user_similarity_df[lover_id][similar_user]
+        if not movie_lovers:
+            movie_lovers = user_movie_matrix[user_movie_matrix[movie_id] > 0].index.tolist()
 
-            # Get their highly rated movies
-            highly_rated = user_movie_matrix.columns[
-                user_movie_matrix.loc[similar_user] >= 4.0
-            ].tolist()
+        for lover_id in movie_lovers[:20]:
+            similar_users = user_similarity_df[lover_id].sort_values(ascending=False)
+            similar_users = similar_users.drop(lover_id)
+            top_similar = similar_users.head(5).index.tolist()
 
-            for mid in highly_rated:
-                if mid != movie_id:  # Don't recommend the same movie
+            for similar_user in top_similar:
+                similarity_score = user_similarity_df[lover_id][similar_user]
+                highly_rated = user_movie_matrix.columns[
+                    user_movie_matrix.loc[similar_user] >= 4.0
+                ].tolist()
+
+                for mid in highly_rated:
+                    if mid != movie_id:
+                        if mid not in recommended_movies:
+                            recommended_movies[mid] = 0
+                        recommended_movies[mid] += similarity_score
+
+    # ---- CONTENT-BASED FALLBACK ----
+    if len(recommended_movies) < 5:
+        searched_movie = movies[movies['movieId'] == movie_id]
+
+        if not searched_movie.empty:
+            searched_genres = set(searched_movie.iloc[0]['genres'].split('|'))
+
+            for _, row in movies.iterrows():
+                if row['movieId'] == movie_id:
+                    continue
+                movie_genres = set(row['genres'].split('|'))
+                overlap = len(searched_genres & movie_genres)
+
+                if overlap > 0:
+                    mid = row['movieId']
                     if mid not in recommended_movies:
                         recommended_movies[mid] = 0
-                    recommended_movies[mid] += similarity_score
+                    recommended_movies[mid] += overlap * 0.5
 
     if not recommended_movies:
         return pd.DataFrame()
 
-    # Get top recommendations
     top_movie_ids = sorted(
         recommended_movies,
         key=recommended_movies.get,
@@ -356,8 +367,8 @@ def render_movie_card(details):
 
     return f"""
     <div class="movie-card">
-        <img 
-            src="{details['poster']}" 
+        <img
+            src="{details['poster']}"
             class="movie-poster"
             onerror="this.src='https://placehold.co/500x750/1f1f1f/999999?text=No+Poster'"
         />
@@ -394,7 +405,7 @@ with st.spinner("🎬 Loading CineMatch engine..."):
 col1, col2, col3 = st.columns([1, 3, 1])
 with col2:
     query = st.text_input(
-        "",
+        "Search Movies",
         placeholder="🔍 Search a movie you love... e.g. Inception, Titanic, The Matrix",
         label_visibility="collapsed"
     )
@@ -410,7 +421,6 @@ if query and len(query) >= 2:
     else:
         st.markdown(f'<div class="section-header">🔍 Search Results for "{query}"</div>', unsafe_allow_html=True)
 
-        # Show search results as selectable options
         movie_options = dict(zip(matches['title'], matches['movieId']))
         selected_title = st.selectbox(
             "Select the movie you meant:",
@@ -420,7 +430,6 @@ if query and len(query) >= 2:
 
         selected_movie_id = movie_options[selected_title]
 
-        # Fetch and show selected movie details
         selected_tmdb = links[links['movieId'] == selected_movie_id]['tmdbId'].values
         if len(selected_tmdb) > 0 and str(selected_tmdb[0]) != 'nan':
             with st.spinner("Loading movie details..."):
@@ -438,7 +447,7 @@ if query and len(query) >= 2:
                 <div class="search-result-card">
                     <div class="search-result-title">{selected_details['title']}</div>
                     <div class="search-result-meta">
-                        ⭐ {selected_details['rating']}/10 &nbsp;|&nbsp; 
+                        ⭐ {selected_details['rating']}/10 &nbsp;|&nbsp;
                         📅 {selected_details['release_date']} &nbsp;|&nbsp;
                         🎭 {', '.join(selected_details['genres'])}
                     </div>
@@ -446,7 +455,6 @@ if query and len(query) >= 2:
                 </div>
                 """, unsafe_allow_html=True)
 
-        # Get & show recommendations
         rec_title = selected_title.split("(")[0].strip()
         st.markdown(f'<div class="section-header">✨ Because you liked {rec_title}... <span class="rec-badge">AI Picks</span></div>', unsafe_allow_html=True)
 
@@ -461,8 +469,6 @@ if query and len(query) >= 2:
             )
 
         if not recs.empty:
-            # ---- GENRE FILTER ----
-            # Extract all unique genres from recommendations
             all_genres = set()
             for genre_str in recs['genres'].dropna():
                 for g in genre_str.split('|'):
@@ -471,14 +477,13 @@ if query and len(query) >= 2:
 
             st.markdown("**🎭 Filter by Genre:**")
             selected_genres = st.multiselect(
-                "",
+                "Filter by Genre",
                 options=all_genres,
                 default=[],
                 placeholder="Select genres to filter...",
                 label_visibility="collapsed"
             )
 
-            # Apply genre filter if any selected
             if selected_genres:
                 filtered_recs = recs[
                     recs['genres'].apply(
@@ -497,7 +502,6 @@ if query and len(query) >= 2:
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                # Show count badge
                 st.markdown(f'<p style="color:#999; margin-bottom:16px">Showing <b style="color:white">{len(filtered_recs)}</b> recommendations</p>', unsafe_allow_html=True)
 
                 tmdb_ids = filtered_recs['tmdbId'].tolist()
@@ -515,7 +519,7 @@ if query and len(query) >= 2:
                 <div class="empty-state-subtext">This movie may not have enough ratings. Try a more popular title!</div>
             </div>
             """, unsafe_allow_html=True)
-            
+
 # ============================================
 # POPULAR MOVIES (shown when no search)
 # ============================================
