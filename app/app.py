@@ -215,6 +215,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# DEBUG - remove after testing
+import os
+api_key = os.getenv("API_KEY")
+st.write(f"API Key found: {bool(api_key)}")
+st.write(f"API Key preview: {str(api_key)[:8] if api_key else 'NONE'}")
 
 # ============================================
 # LOAD DATA & BUILD MODEL
